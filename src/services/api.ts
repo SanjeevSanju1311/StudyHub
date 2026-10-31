@@ -1,8 +1,9 @@
-import { SimpleSubject, ChecklistTopic, TopicContent, ContentLink, CommunityMember } from '../types';
+import { SimpleSubject, ChecklistTopic, TopicContent, ContentLink, CommunityMember, ActivityLog, LogActionType } from '../types';
 import { supabase, isSupabaseConfigured } from './supabase';
 
 const STORAGE_SUBJECTS_KEY = 'peerdesk_clean_subjects_v4';
 const STORAGE_MEMBERS_KEY = 'peerdesk_clean_members_v4';
+const STORAGE_LOGS_KEY = 'peerdesk_clean_logs_v4';
 
 function createDefaultUnits() {
   return {
@@ -45,6 +46,24 @@ function getLocalMembers(): CommunityMember[] {
 function saveLocalMembers(members: CommunityMember[]) {
   try {
     localStorage.setItem(STORAGE_MEMBERS_KEY, JSON.stringify(members));
+  } catch {
+    // ignore
+  }
+}
+
+function getLocalLogs(): ActivityLog[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_LOGS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {
+    // ignore
+  }
+  return [];
+}
+
+function saveLocalLogs(logs: ActivityLog[]) {
+  try {
+    localStorage.setItem(STORAGE_LOGS_KEY, JSON.stringify(logs.slice(0, 200)));
   } catch {
     // ignore
   }
@@ -699,5 +718,91 @@ export const api = {
     } catch {
       // ignore
     }
+  },
+
+  async getLogs(): Promise<ActivityLog[]> {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('activity_logs')
+          .select('*')
+          .order('timestamp', { ascending: false })
+          .limit(150);
+
+        if (!error && data) {
+          const formatted: ActivityLog[] = data.map((row: any) => ({
+            id: row.id,
+            userName: row.user_name || row.userName || 'Anonymous',
+            action: row.action as LogActionType,
+            entityType: row.entity_type || row.entityType,
+            details: row.details,
+            timestamp: Number(row.timestamp),
+          }));
+          saveLocalLogs(formatted);
+          return formatted;
+        }
+      } catch (err) {
+        console.warn('Supabase getLogs failed, falling back:', err);
+      }
+    }
+
+    try {
+      const res = await fetch('/api/logs');
+      if (res.ok) {
+        const data = await res.json();
+        saveLocalLogs(data);
+        return data;
+      }
+    } catch {
+      // fallback
+    }
+
+    return getLocalLogs();
+  },
+
+  async addLog(log: {
+    userName: string;
+    action: LogActionType;
+    entityType: 'subject' | 'checklist' | 'content' | 'member';
+    details: string;
+  }): Promise<ActivityLog> {
+    const newLog: ActivityLog = {
+      id: 'log-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7),
+      userName: log.userName?.trim() || 'Anonymous',
+      action: log.action,
+      entityType: log.entityType,
+      details: log.details,
+      timestamp: Date.now(),
+    };
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase.from('activity_logs').insert({
+          id: newLog.id,
+          user_name: newLog.userName,
+          action: newLog.action,
+          entity_type: newLog.entityType,
+          details: newLog.details,
+          timestamp: newLog.timestamp,
+        });
+      } catch (err) {
+        console.warn('Supabase addLog failed:', err);
+      }
+    }
+
+    try {
+      fetch('/api/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newLog),
+      }).catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    const localList = getLocalLogs();
+    localList.unshift(newLog);
+    saveLocalLogs(localList);
+    return newLog;
   },
 };

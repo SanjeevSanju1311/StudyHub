@@ -26,11 +26,23 @@ CREATE TABLE IF NOT EXISTS public.members (
   last_active BIGINT NOT NULL
 );
 
--- 3. Enable Row Level Security (RLS)
+-- 3. Create the activity_logs table (stores member audit logs: add, edit, delete, view)
+CREATE TABLE IF NOT EXISTS public.activity_logs (
+  id TEXT PRIMARY KEY,
+  user_name TEXT NOT NULL,
+  action TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  details TEXT NOT NULL,
+  timestamp BIGINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 4. Enable Row Level Security (RLS)
 ALTER TABLE public.subjects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.activity_logs ENABLE ROW LEVEL SECURITY;
 
--- 4. Create open access policies so all peer students can read and contribute
+-- 5. Create open access policies so all peer students can read and contribute
 -- Subjects policies
 DROP POLICY IF EXISTS "Public select on subjects" ON public.subjects;
 CREATE POLICY "Public select on subjects" ON public.subjects FOR SELECT USING (true);
@@ -54,6 +66,17 @@ CREATE POLICY "Public insert on members" ON public.members FOR INSERT WITH CHECK
 DROP POLICY IF EXISTS "Public update on members" ON public.members;
 CREATE POLICY "Public update on members" ON public.members FOR UPDATE USING (true);
 
--- 5. Enable Supabase Realtime (optional, allows live peer syncing)
+-- Activity Logs policies
+DROP POLICY IF EXISTS "Public select on activity_logs" ON public.activity_logs;
+CREATE POLICY "Public select on activity_logs" ON public.activity_logs FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Public insert on activity_logs" ON public.activity_logs;
+CREATE POLICY "Public insert on activity_logs" ON public.activity_logs FOR INSERT WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Public delete on activity_logs" ON public.activity_logs;
+CREATE POLICY "Public delete on activity_logs" ON public.activity_logs FOR DELETE USING (true);
+
+-- 6. Enable Supabase Realtime (allows live peer syncing)
 ALTER PUBLICATION supabase_realtime ADD TABLE public.subjects;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.members;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.activity_logs;

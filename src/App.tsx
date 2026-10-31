@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { SimpleSubject, ChecklistTopic, TopicContent, ContentLink, CommunityMember } from './types';
+import { SimpleSubject, ChecklistTopic, TopicContent, ContentLink, CommunityMember, ActivityLog, LogActionType } from './types';
 import { api } from './services/api';
 import {
   BookOpen,
@@ -18,6 +18,9 @@ import {
   ChevronRight,
   ListCheck,
   FolderOpen,
+  History,
+  RefreshCw,
+  Search,
 } from 'lucide-react';
 
 const LOCAL_STORAGE_NAME_KEY = 'peerdesk_student_name_v4';
@@ -34,6 +37,17 @@ function formatRelativeTime(timestamp: number): string {
   if (hours < 24) return `${hours}h ago`;
   if (days === 1) return 'yesterday';
   return `${days}d ago`;
+}
+
+function formatExactDateTime(timestamp: number): string {
+  if (!timestamp) return '';
+  const d = new Date(timestamp);
+  return d.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function getDomain(url: string): string {
@@ -85,6 +99,13 @@ export default function App() {
     { id: 'lnk-1', title: '', url: '' },
   ]);
 
+  // Activity & Audit Logs
+  const [logs, setLogs] = useState<ActivityLog[]>([]);
+  const [isLogsModalOpen, setIsLogsModalOpen] = useState<boolean>(false);
+  const [isLogsLoading, setIsLogsLoading] = useState<boolean>(false);
+  const [logFilter, setLogFilter] = useState<'all' | LogActionType>('all');
+  const [logSearch, setLogSearch] = useState<string>('');
+
   // Initial load
   useEffect(() => {
     const savedName = localStorage.getItem(LOCAL_STORAGE_NAME_KEY);
@@ -98,9 +119,14 @@ export default function App() {
     async function loadData() {
       setIsLoading(true);
       try {
-        const [subList, memList] = await Promise.all([api.getSubjects(), api.getMembers()]);
+        const [subList, memList, logList] = await Promise.all([
+          api.getSubjects(),
+          api.getMembers(),
+          api.getLogs(),
+        ]);
         setSubjects(subList);
         setMembers(memList);
+        setLogs(logList);
       } catch (err) {
         console.error('Failed loading data:', err);
       } finally {
@@ -110,6 +136,36 @@ export default function App() {
     loadData();
   }, []);
 
+  const loadLogs = async () => {
+    setIsLogsLoading(true);
+    try {
+      const list = await api.getLogs();
+      setLogs(list);
+    } catch (err) {
+      console.error('Failed loading logs:', err);
+    } finally {
+      setIsLogsLoading(false);
+    }
+  };
+
+  const logActivity = (
+    action: LogActionType,
+    entityType: 'subject' | 'checklist' | 'content' | 'member',
+    details: string
+  ) => {
+    api
+      .addLog({ userName: userName || 'Anonymous', action, entityType, details })
+      .then((createdLog) => {
+        setLogs((prev) => [createdLog, ...prev.filter((l) => l.id !== createdLog.id)].slice(0, 200));
+      })
+      .catch(() => {});
+  };
+
+  const handleOpenLogsModal = () => {
+    loadLogs();
+    setIsLogsModalOpen(true);
+  };
+
   // Save Name
   const handleSaveName = (e: React.FormEvent) => {
     e.preventDefault();
@@ -118,6 +174,7 @@ export default function App() {
     setUserName(finalName);
     localStorage.setItem(LOCAL_STORAGE_NAME_KEY, finalName);
     api.joinCommunity(finalName);
+    logActivity('add', 'member', `Joined community as "${finalName}"`);
     setIsNamePromptOpen(false);
     api.getMembers().then(setMembers).catch(() => {});
   };
@@ -167,12 +224,22 @@ export default function App() {
     if (editingSubject) {
       const updated = await api.updateSubject(editingSubject.id, subjectName.trim(), subjectSemester.trim());
       setSubjects((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+      logActivity(
+        'edit',
+        'subject',
+        `Renamed subject to "${updated.name}" (${updated.semester || 'No semester'})`
+      );
       setEditingSubject(null);
     } else {
       const created = await api.addSubject(subjectName.trim(), subjectSemester.trim(), userName);
       setSubjects((prev) => [...prev, created]);
       setSelectedSubjectId(created.id);
       setSelectedUnit(1);
+      logActivity(
+        'add',
+        'subject',
+        `Created subject "${created.name}" (${created.semester || 'No semester'})`
+      );
     }
 
     setSubjectName('');
@@ -183,8 +250,14 @@ export default function App() {
   // Delete Subject
   const handleDeleteSubject = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    const subToDelete = subjects.find((s) => s.id === id);
     if (window.confirm('Delete this subject and all its units?')) {
       await api.deleteSubject(id);
+      logActivity(
+        'delete',
+        'subject',
+        `Deleted subject "${subToDelete?.name || id}" and all its units`
+      );
       setSubjects((prev) => prev.filter((s) => s.id !== id));
       if (selectedSubjectId === id) {
         setSelectedSubjectId(null);
@@ -203,6 +276,12 @@ export default function App() {
       selectedUnit,
       newChecklistTitle.trim(),
       userName
+    );
+
+    logActivity(
+      'add',
+      'checklist',
+      `Added topic to cover "${created.title}" in Unit ${selectedUnit} (${activeSubject?.name || ''})`
     );
 
     setSubjects((prev) =>
@@ -229,12 +308,21 @@ export default function App() {
   const handleToggleChecklist = async (checkId: string) => {
     if (!selectedSubjectId || !userName) return;
 
+    const targetItem = activeUnitSection.checklist.find((c) => c.id === checkId);
     const res = await api.toggleChecklistTopic(
       selectedSubjectId,
       selectedUnit,
       checkId,
       userName
     );
+
+    if (targetItem) {
+      logActivity(
+        'view',
+        'checklist',
+        `Marked topic "${targetItem.title}" as ${res.isCompleted ? 'completed/read' : 'unread'} in Unit ${selectedUnit} (${activeSubject?.name || ''})`
+      );
+    }
 
     setSubjects((prev) =>
       prev.map((sub) => {
@@ -278,6 +366,13 @@ export default function App() {
       checkId,
       editingChecklistTitle.trim()
     );
+
+    logActivity(
+      'edit',
+      'checklist',
+      `Renamed topic to cover to "${updated.title}" in Unit ${selectedUnit} (${activeSubject?.name || ''})`
+    );
+
     setSubjects((prev) =>
       prev.map((sub) => {
         if (sub.id !== selectedSubjectId) return sub;
@@ -308,8 +403,14 @@ export default function App() {
   // Delete checklist topic
   const handleDeleteChecklist = async (checkId: string) => {
     if (!selectedSubjectId) return;
+    const itemToDelete = activeUnitSection.checklist.find((item) => item.id === checkId);
     if (window.confirm('Delete this checklist topic?')) {
       await api.deleteChecklistTopic(selectedSubjectId, selectedUnit, checkId);
+      logActivity(
+        'delete',
+        'checklist',
+        `Deleted topic to cover "${itemToDelete?.title || checkId}" from Unit ${selectedUnit} (${activeSubject?.name || ''})`
+      );
       setSubjects((prev) =>
         prev.map((sub) => {
           if (sub.id !== selectedSubjectId) return sub;
@@ -399,6 +500,12 @@ export default function App() {
         userName
       );
 
+      logActivity(
+        'edit',
+        'content',
+        `Updated material "${updated.topic}" with ${validLinks.length} link(s) in Unit ${selectedUnit} (${activeSubject?.name || ''})`
+      );
+
       setSubjects((prev) =>
         prev.map((sub) => {
           if (sub.id !== selectedSubjectId) return sub;
@@ -423,6 +530,12 @@ export default function App() {
         validLinks,
         contentNotes.trim() || undefined,
         userName
+      );
+
+      logActivity(
+        'add',
+        'content',
+        `Uploaded material "${created.topic}" with ${validLinks.length} link(s) to Unit ${selectedUnit} (${activeSubject?.name || ''})`
       );
 
       setSubjects((prev) =>
@@ -450,8 +563,14 @@ export default function App() {
   // Delete Topic Content
   const handleDeleteContent = async (contentId: string) => {
     if (!selectedSubjectId) return;
+    const itemToDelete = activeUnitSection.contents.find((c) => c.id === contentId);
     if (window.confirm('Delete this topic material?')) {
       await api.deleteTopicContent(selectedSubjectId, selectedUnit, contentId);
+      logActivity(
+        'delete',
+        'content',
+        `Deleted material "${itemToDelete?.topic || contentId}" from Unit ${selectedUnit} (${activeSubject?.name || ''})`
+      );
       setSubjects((prev) =>
         prev.map((sub) => {
           if (sub.id !== selectedSubjectId) return sub;
@@ -499,6 +618,20 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2">
+            <button
+              onClick={handleOpenLogsModal}
+              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-colors shadow-2xs"
+              title="View member activity & audit logs"
+            >
+              <History className="h-3.5 w-3.5 text-indigo-600" />
+              <span className="hidden sm:inline">Logs</span>
+              {logs.length > 0 && (
+                <span className="rounded-full bg-indigo-50 text-indigo-700 px-1.5 py-0.2 text-[10px] font-bold">
+                  {logs.length}
+                </span>
+              )}
+            </button>
+
             <button
               onClick={() => {
                 api.getMembers().then(setMembers).catch(() => {});
@@ -586,6 +719,7 @@ export default function App() {
                       onClick={() => {
                         setSelectedSubjectId(sub.id);
                         setSelectedUnit(1);
+                        logActivity('view', 'subject', `Viewed subject "${sub.name}" (Unit 1)`);
                       }}
                       className="group relative rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-2xs hover:border-indigo-400 hover:shadow-xs transition-all cursor-pointer flex flex-col justify-between min-h-[140px]"
                     >
@@ -1365,6 +1499,195 @@ export default function App() {
                 </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 5: Member Activity & Audit Logs */}
+      {isLogsModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-5 shadow-2xl border border-slate-200 flex flex-col max-h-[88vh]">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-3">
+              <div className="flex items-center gap-2">
+                <div className="h-8 w-8 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
+                  <History className="h-4 w-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-slate-900">Activity & Audit Logs</h3>
+                    <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                      Live Sync ({logs.length})
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    Track all actions performed by members (add, edit, delete, view)
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={loadLogs}
+                  className="rounded-lg p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+                  title="Refresh logs"
+                >
+                  <RefreshCw className={`h-4 w-4 ${isLogsLoading ? 'animate-spin text-indigo-600' : ''}`} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsLogsModalOpen(false)}
+                  className="rounded-lg p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Filter and Search Bar */}
+            <div className="space-y-2 mb-3">
+              <div className="relative">
+                <Search className="h-3.5 w-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Filter by member name, topic, or description..."
+                  value={logSearch}
+                  onChange={(e) => setLogSearch(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50/60 pl-8 pr-3 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-hidden focus:border-indigo-400 focus:bg-white transition-all"
+                />
+              </div>
+
+              <div className="flex items-center gap-1 overflow-x-auto pb-1 text-xs">
+                {(
+                  [
+                    { key: 'all', label: 'All Actions' },
+                    { key: 'add', label: '+ Add' },
+                    { key: 'edit', label: '✎ Edit' },
+                    { key: 'delete', label: '✕ Delete' },
+                    { key: 'view', label: '👁 View/Read' },
+                  ] as const
+                ).map((f) => {
+                  const count =
+                    f.key === 'all'
+                      ? logs.length
+                      : logs.filter((l) => l.action === f.key).length;
+                  const isActive = logFilter === f.key;
+
+                  return (
+                    <button
+                      key={f.key}
+                      onClick={() => setLogFilter(f.key)}
+                      className={`rounded-lg px-2.5 py-1 font-semibold text-[11px] whitespace-nowrap transition-all border ${
+                        isActive
+                          ? 'bg-slate-900 text-white border-slate-900'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      {f.label} ({count})
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Logs List */}
+            <div className="flex-1 overflow-y-auto space-y-2 pr-1 min-h-[220px]">
+              {logs.filter((log) => {
+                const matchesFilter = logFilter === 'all' || log.action === logFilter;
+                const q = logSearch.trim().toLowerCase();
+                const matchesSearch =
+                  !q ||
+                  log.userName.toLowerCase().includes(q) ||
+                  log.details.toLowerCase().includes(q) ||
+                  log.action.toLowerCase().includes(q) ||
+                  log.entityType.toLowerCase().includes(q);
+                return matchesFilter && matchesSearch;
+              }).length === 0 ? (
+                <div className="py-12 text-center text-slate-400 text-xs">
+                  <History className="h-8 w-8 text-slate-300 mx-auto mb-2 opacity-60" />
+                  <p className="font-semibold text-slate-600">No activity logs found</p>
+                  <p className="text-[11px] mt-0.5">
+                    {logSearch || logFilter !== 'all'
+                      ? 'Try clearing the search or filter.'
+                      : 'Actions like adding, editing, deleting, or viewing subjects and topics will appear here.'}
+                  </p>
+                </div>
+              ) : (
+                logs
+                  .filter((log) => {
+                    const matchesFilter = logFilter === 'all' || log.action === logFilter;
+                    const q = logSearch.trim().toLowerCase();
+                    const matchesSearch =
+                      !q ||
+                      log.userName.toLowerCase().includes(q) ||
+                      log.details.toLowerCase().includes(q) ||
+                      log.action.toLowerCase().includes(q) ||
+                      log.entityType.toLowerCase().includes(q);
+                    return matchesFilter && matchesSearch;
+                  })
+                  .map((log) => {
+                    const actionBadge =
+                      log.action === 'add'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : log.action === 'edit'
+                        ? 'bg-amber-50 text-amber-700 border-amber-200'
+                        : log.action === 'delete'
+                        ? 'bg-rose-50 text-rose-700 border-rose-200'
+                        : 'bg-sky-50 text-sky-700 border-sky-200';
+
+                    return (
+                      <div
+                        key={log.id}
+                        className="rounded-xl border border-slate-200 bg-white p-3 shadow-2xs hover:border-slate-300 transition-colors flex items-start gap-3"
+                      >
+                        <div className="h-8 w-8 rounded-full bg-gradient-to-tr from-indigo-500 to-indigo-600 text-white font-bold text-xs flex items-center justify-center shrink-0 shadow-2xs">
+                          {log.userName.charAt(0).toUpperCase()}
+                        </div>
+
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <strong className="text-xs font-bold text-slate-900">
+                              {log.userName}
+                            </strong>
+                            <span
+                              className={`rounded-md border px-1.5 py-0.2 text-[9px] font-extrabold uppercase ${actionBadge}`}
+                            >
+                              {log.action}
+                            </span>
+                            <span className="rounded-md bg-slate-100 text-slate-500 px-1.5 py-0.2 text-[9px] font-bold uppercase">
+                              {log.entityType}
+                            </span>
+                          </div>
+
+                          <p className="text-xs text-slate-700 mt-1 leading-relaxed">
+                            {log.details}
+                          </p>
+
+                          <div className="flex items-center gap-2 mt-1.5 text-[10px] text-slate-400">
+                            <span>{formatRelativeTime(log.timestamp)}</span>
+                            <span>•</span>
+                            <span>{formatExactDateTime(log.timestamp)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-between border-t border-slate-100 pt-3 mt-3 text-xs text-slate-400">
+              <span>All logs stored in database</span>
+              <button
+                type="button"
+                onClick={() => setIsLogsModalOpen(false)}
+                className="rounded-xl bg-slate-900 px-4 py-1.5 font-bold text-white hover:bg-slate-800 transition-colors shadow-2xs"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

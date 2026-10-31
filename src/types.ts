@@ -47,3 +47,15 @@ export interface CommunityMember {
   contributions: number;
   lastActive: number;
 }
+
+export type LogActionType = 'add' | 'edit' | 'delete' | 'view';
+
+export interface ActivityLog {
+  id: string;
+  userName: string;
+  action: LogActionType;
+  entityType: 'subject' | 'checklist' | 'content' | 'member';
+  details: string;
+  timestamp: number;
+}
+

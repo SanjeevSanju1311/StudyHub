@@ -54,9 +54,21 @@ export interface SimpleSubject {
   units: Record<number, UnitSection>;
 }
 
+export type LogActionType = 'add' | 'edit' | 'delete' | 'view';
+
+export interface ActivityLog {
+  id: string;
+  userName: string;
+  action: LogActionType;
+  entityType: 'subject' | 'checklist' | 'content' | 'member';
+  details: string;
+  timestamp: number;
+}
+
 interface StoreData {
   subjects: SimpleSubject[];
   members: Array<{ name: string; joinedAt: number; lastActive: number }>;
+  logs: ActivityLog[];
 }
 
 function createEmptyUnits(): Record<number, UnitSection> {
@@ -77,6 +89,7 @@ function loadStore(): StoreData {
       const parsed = JSON.parse(content);
       if (Array.isArray(parsed.subjects)) {
         if (!Array.isArray(parsed.members)) parsed.members = [];
+        if (!Array.isArray(parsed.logs)) parsed.logs = [];
         return parsed;
       }
     }
@@ -87,6 +100,7 @@ function loadStore(): StoreData {
   const emptyStore: StoreData = {
     subjects: [],
     members: [],
+    logs: [],
   };
   saveStore(emptyStore);
   return emptyStore;
@@ -118,6 +132,31 @@ function touchMember(store: StoreData, name: string): boolean {
     store.members.push({ name: clean, joinedAt: now, lastActive: now });
     return true;
   }
+}
+
+function addServerLog(
+  store: StoreData,
+  log: {
+    userName: string;
+    action: LogActionType;
+    entityType: 'subject' | 'checklist' | 'content' | 'member';
+    details: string;
+  }
+): ActivityLog {
+  const newLog: ActivityLog = {
+    id: 'log-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+    userName: log.userName?.trim() || 'Anonymous',
+    action: log.action,
+    entityType: log.entityType,
+    details: log.details,
+    timestamp: Date.now(),
+  };
+  if (!Array.isArray(store.logs)) store.logs = [];
+  store.logs.unshift(newLog);
+  if (store.logs.length > 300) {
+    store.logs = store.logs.slice(0, 300);
+  }
+  return newLog;
 }
 
 async function startServer() {
@@ -163,6 +202,23 @@ async function startServer() {
     });
 
     res.json(Array.from(map.values()).sort((a, b) => b.lastActive - a.lastActive));
+  });
+
+  // GET activity logs
+  app.get('/api/logs', (_req: Request, res: Response) => {
+    const store = loadStore();
+    res.json(store.logs || []);
+  });
+
+  // POST create activity log
+  app.post('/api/logs', (req: Request, res: Response) => {
+    const { userName, action, entityType, details } = req.body;
+    if (!action || !details) return res.status(400).json({ error: 'Missing log fields' });
+    const store = loadStore();
+    const newLog = addServerLog(store, { userName, action, entityType, details });
+    touchMember(store, userName || 'Anonymous');
+    saveStore(store);
+    res.status(201).json(newLog);
   });
 
   // POST join community
