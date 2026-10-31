@@ -1,0 +1,6 @@
+{
+  "name": "PeerDesk - Group Study Materials Hub",
+  "description": "A clean, transparent collaborative study material hub for student friend groups. Organized semester, subject, and unit-wise with links, notes, and contributor attribution.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
