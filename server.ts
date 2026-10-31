@@ -198,6 +198,22 @@ async function startServer() {
     res.status(201).json(newSub);
   });
 
+  // PUT update subject
+  app.put('/api/subjects/:id', (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { name, semester } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: 'Subject name required' });
+
+    const store = loadStore();
+    const subject = store.subjects.find((s) => s.id === id);
+    if (!subject) return res.status(404).json({ error: 'Subject not found' });
+
+    subject.name = name.trim();
+    subject.semester = semester?.trim() || undefined;
+    saveStore(store);
+    res.json(subject);
+  });
+
   // DELETE subject
   app.delete('/api/subjects/:id', (req: Request, res: Response) => {
     const { id } = req.params;
@@ -257,6 +273,25 @@ async function startServer() {
     touchMember(store, cleanUser);
     saveStore(store);
     res.json({ checkId, completedBy: item.completedBy, isCompleted: item.completedBy.includes(cleanUser) });
+  });
+
+  // PUT update checklist topic title
+  app.put('/api/subjects/:subjectId/units/:unit/checklist/:checkId', (req: Request, res: Response) => {
+    const { subjectId, unit, checkId } = req.params;
+    const { title } = req.body;
+    if (!title || !title.trim()) return res.status(400).json({ error: 'Title required' });
+
+    const store = loadStore();
+    const subject = store.subjects.find((s) => s.id === subjectId);
+    if (!subject) return res.status(404).json({ error: 'Subject not found' });
+
+    const unitNum = Number(unit);
+    const item = subject.units[unitNum]?.checklist.find((c) => c.id === checkId);
+    if (!item) return res.status(404).json({ error: 'Checklist item not found' });
+
+    item.title = title.trim();
+    saveStore(store);
+    res.json(item);
   });
 
   // DELETE checklist topic

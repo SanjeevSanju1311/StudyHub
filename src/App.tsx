@@ -11,6 +11,7 @@ import {
   User,
   Users,
   X,
+  Check,
   FileText,
   CheckSquare,
   Square,
@@ -67,11 +68,14 @@ export default function App() {
   const [isContentModalOpen, setIsContentModalOpen] = useState<boolean>(false);
 
   // Subject Form
+  const [editingSubject, setEditingSubject] = useState<SimpleSubject | null>(null);
   const [subjectName, setSubjectName] = useState<string>('');
   const [subjectSemester, setSubjectSemester] = useState<string>('Sem 5');
 
-  // Inline "Topic to Cover" checklist input
+  // Inline "Topic to Cover" checklist input & edit state
   const [newChecklistTitle, setNewChecklistTitle] = useState<string>('');
+  const [editingChecklistId, setEditingChecklistId] = useState<string | null>(null);
+  const [editingChecklistTitle, setEditingChecklistTitle] = useState<string>('');
 
   // Topic Content Form (Add / Edit)
   const [editingContent, setEditingContent] = useState<TopicContent | null>(null);
@@ -138,16 +142,41 @@ export default function App() {
     };
   }, [activeSubject, selectedUnit]);
 
-  // Create Subject
-  const handleCreateSubject = async (e: React.FormEvent) => {
+  // Open Add Subject
+  const handleOpenAddSubject = () => {
+    setEditingSubject(null);
+    setSubjectName('');
+    setSubjectSemester('Sem 5');
+    setIsAddSubjectOpen(true);
+  };
+
+  // Open Edit Subject
+  const handleOpenEditSubject = (sub: SimpleSubject, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setEditingSubject(sub);
+    setSubjectName(sub.name);
+    setSubjectSemester(sub.semester || 'Sem 5');
+    setIsAddSubjectOpen(true);
+  };
+
+  // Save Subject (Create or Edit)
+  const handleSaveSubject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!subjectName.trim()) return;
-    const created = await api.addSubject(subjectName.trim(), subjectSemester.trim(), userName);
-    setSubjects((prev) => [...prev, created]);
+
+    if (editingSubject) {
+      const updated = await api.updateSubject(editingSubject.id, subjectName.trim(), subjectSemester.trim());
+      setSubjects((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+      setEditingSubject(null);
+    } else {
+      const created = await api.addSubject(subjectName.trim(), subjectSemester.trim(), userName);
+      setSubjects((prev) => [...prev, created]);
+      setSelectedSubjectId(created.id);
+      setSelectedUnit(1);
+    }
+
     setSubjectName('');
     setIsAddSubjectOpen(false);
-    setSelectedSubjectId(created.id);
-    setSelectedUnit(1);
     api.getMembers().then(setMembers).catch(() => {});
   };
 
@@ -230,10 +259,25 @@ export default function App() {
     );
   };
 
-  // Delete checklist topic
-  const handleDeleteChecklist = async (checkId: string) => {
-    if (!selectedSubjectId) return;
-    await api.deleteChecklistTopic(selectedSubjectId, selectedUnit, checkId);
+  // Start editing checklist topic
+  const handleStartEditChecklist = (item: ChecklistTopic, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingChecklistId(item.id);
+    setEditingChecklistTitle(item.title);
+  };
+
+  // Save edited checklist topic
+  const handleSaveEditChecklist = async (checkId: string) => {
+    if (!selectedSubjectId || !editingChecklistTitle.trim()) {
+      setEditingChecklistId(null);
+      return;
+    }
+    const updated = await api.updateChecklistTopic(
+      selectedSubjectId,
+      selectedUnit,
+      checkId,
+      editingChecklistTitle.trim()
+    );
     setSubjects((prev) =>
       prev.map((sub) => {
         if (sub.id !== selectedSubjectId) return sub;
@@ -244,12 +288,45 @@ export default function App() {
             ...sub.units,
             [selectedUnit]: {
               ...currentUnit,
-              checklist: currentUnit.checklist.filter((item) => item.id !== checkId),
+              checklist: currentUnit.checklist.map((c) =>
+                c.id === checkId ? { ...c, title: updated.title } : c
+              ),
             },
           },
         };
       })
     );
+    setEditingChecklistId(null);
+    setEditingChecklistTitle('');
+  };
+
+  const handleCancelEditChecklist = () => {
+    setEditingChecklistId(null);
+    setEditingChecklistTitle('');
+  };
+
+  // Delete checklist topic
+  const handleDeleteChecklist = async (checkId: string) => {
+    if (!selectedSubjectId) return;
+    if (window.confirm('Delete this checklist topic?')) {
+      await api.deleteChecklistTopic(selectedSubjectId, selectedUnit, checkId);
+      setSubjects((prev) =>
+        prev.map((sub) => {
+          if (sub.id !== selectedSubjectId) return sub;
+          const currentUnit = sub.units[selectedUnit] || { checklist: [], contents: [] };
+          return {
+            ...sub,
+            units: {
+              ...sub.units,
+              [selectedUnit]: {
+                ...currentUnit,
+                checklist: currentUnit.checklist.filter((item) => item.id !== checkId),
+              },
+            },
+          };
+        })
+      );
+    }
   };
 
   // Open Add Topic Content Modal
@@ -467,7 +544,7 @@ export default function App() {
               </div>
 
               <button
-                onClick={() => setIsAddSubjectOpen(true)}
+                onClick={handleOpenAddSubject}
                 className="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-indigo-700 active:scale-98 transition-all"
               >
                 <Plus className="h-4 w-4" />
@@ -484,7 +561,7 @@ export default function App() {
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                 {/* Add Subject Box */}
                 <div
-                  onClick={() => setIsAddSubjectOpen(true)}
+                  onClick={handleOpenAddSubject}
                   className="rounded-2xl border-2 border-dashed border-indigo-200 bg-indigo-50/20 p-5 flex flex-col items-center justify-center text-center cursor-pointer hover:border-indigo-500 hover:bg-indigo-50/50 transition-all min-h-[140px] group"
                 >
                   <div className="h-10 w-10 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center mb-2 group-hover:scale-105 transition-transform">
@@ -540,8 +617,15 @@ export default function App() {
                         </span>
                         <div className="flex items-center gap-1">
                           <button
+                            onClick={(e) => handleOpenEditSubject(sub, e)}
+                            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-indigo-600 transition-colors"
+                            title="Edit subject"
+                          >
+                            <Edit2 className="h-3.5 w-3.5" />
+                          </button>
+                          <button
                             onClick={(e) => handleDeleteSubject(sub.id, e)}
-                            className="rounded-lg p-1 text-slate-300 hover:bg-rose-50 hover:text-rose-600 transition-colors"
+                            className="rounded-lg p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-colors"
                             title="Delete subject"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
@@ -578,6 +662,20 @@ export default function App() {
                         {activeSubject.semester}
                       </span>
                     )}
+                    <button
+                      onClick={(e) => handleOpenEditSubject(activeSubject, e)}
+                      className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-indigo-600 transition-colors"
+                      title="Edit subject"
+                    >
+                      <Edit2 className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={(e) => handleDeleteSubject(activeSubject.id, e)}
+                      className="rounded-lg p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-colors"
+                      title="Delete subject"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                   <p className="text-[11px] text-slate-400 truncate">
                     Created by {activeSubject.createdBy.name}
@@ -693,6 +791,49 @@ export default function App() {
                   {activeUnitSection.checklist.map((item) => {
                     const isRead = item.completedBy && item.completedBy.includes(userName);
                     const readByCount = item.completedBy?.length || 0;
+                    const isEditing = editingChecklistId === item.id;
+
+                    if (isEditing) {
+                      return (
+                        <div
+                          key={item.id}
+                          className="flex items-center gap-2 rounded-xl bg-white border-2 border-indigo-500 px-3 py-2 text-xs shadow-xs"
+                        >
+                          <input
+                            type="text"
+                            autoFocus
+                            value={editingChecklistTitle}
+                            onChange={(e) => setEditingChecklistTitle(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                handleSaveEditChecklist(item.id);
+                              } else if (e.key === 'Escape') {
+                                handleCancelEditChecklist();
+                              }
+                            }}
+                            className="flex-1 bg-transparent text-slate-900 font-semibold focus:outline-hidden text-xs"
+                            placeholder="Checklist topic title..."
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleSaveEditChecklist(item.id)}
+                            className="rounded-lg bg-indigo-600 p-1 text-white hover:bg-indigo-700 transition-colors"
+                            title="Save changes"
+                          >
+                            <Check className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleCancelEditChecklist}
+                            className="rounded-lg bg-slate-100 p-1 text-slate-500 hover:bg-slate-200 transition-colors"
+                            title="Cancel"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      );
+                    }
 
                     return (
                       <div
@@ -704,7 +845,7 @@ export default function App() {
                             : 'bg-slate-50/60 border-slate-100 hover:bg-slate-100/60'
                         }`}
                       >
-                        <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
                           {isRead ? (
                             <CheckSquare className="h-4 w-4 text-emerald-600 shrink-0" />
                           ) : (
@@ -719,7 +860,7 @@ export default function App() {
                           </span>
                         </div>
 
-                        <div className="flex items-center gap-2 shrink-0">
+                        <div className="flex items-center gap-1.5 shrink-0">
                           {isRead && (
                             <span className="rounded-md bg-emerald-100 px-1.5 py-0.2 text-[10px] font-bold text-emerald-800">
                               ✓ Read
@@ -732,14 +873,22 @@ export default function App() {
                           )}
                           <button
                             type="button"
+                            onClick={(e) => handleStartEditChecklist(item, e)}
+                            className="p-1 rounded-md text-slate-400 hover:bg-indigo-50 hover:text-indigo-600 transition-colors"
+                            title="Edit topic title"
+                          >
+                            <Edit2 className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
                             onClick={(e) => {
                               e.stopPropagation();
                               handleDeleteChecklist(item.id);
                             }}
-                            className="opacity-0 group-hover:opacity-100 p-1 text-slate-300 hover:text-rose-600 transition-opacity"
+                            className="p-1 rounded-md text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-colors"
                             title="Delete topic"
                           >
-                            <Trash2 className="h-3 w-3" />
+                            <Trash2 className="h-3.5 w-3.5" />
                           </button>
                         </div>
                       </div>
@@ -984,21 +1133,26 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL 3: Add Subject */}
+      {/* MODAL 3: Add / Edit Subject */}
       {isAddSubjectOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
           <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl border border-slate-200">
             <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-3">
-              <h3 className="text-sm font-bold text-slate-900">Add Subject Box</h3>
+              <h3 className="text-sm font-bold text-slate-900">
+                {editingSubject ? 'Edit Subject' : 'Add Subject Box'}
+              </h3>
               <button
-                onClick={() => setIsAddSubjectOpen(false)}
+                onClick={() => {
+                  setIsAddSubjectOpen(false);
+                  setEditingSubject(null);
+                }}
                 className="text-slate-400 hover:text-slate-600"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateSubject} className="space-y-3 text-xs">
+            <form onSubmit={handleSaveSubject} className="space-y-3 text-xs">
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Subject Name *</label>
                 <input
@@ -1024,23 +1178,47 @@ export default function App() {
               </div>
 
               <div className="rounded-xl bg-slate-50 p-2.5 text-[11px] text-slate-500">
-                Created by: <strong className="text-slate-800">{userName}</strong>
+                {editingSubject ? (
+                  <span>Editing subject: <strong className="text-slate-800">{editingSubject.name}</strong></span>
+                ) : (
+                  <span>Created by: <strong className="text-slate-800">{userName}</strong></span>
+                )}
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsAddSubjectOpen(false)}
-                  className="rounded-xl px-3 py-1.5 text-slate-600 hover:bg-slate-100"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="rounded-xl bg-indigo-600 px-4 py-1.5 font-bold text-white hover:bg-indigo-700 shadow-xs"
-                >
-                  Create Subject
-                </button>
+              <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                {editingSubject ? (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      handleDeleteSubject(editingSubject.id, e);
+                      setIsAddSubjectOpen(false);
+                      setEditingSubject(null);
+                    }}
+                    className="rounded-xl px-3 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors"
+                  >
+                    Delete Subject
+                  </button>
+                ) : (
+                  <div />
+                )}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAddSubjectOpen(false);
+                      setEditingSubject(null);
+                    }}
+                    className="rounded-xl px-3 py-1.5 text-slate-600 hover:bg-slate-100"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="rounded-xl bg-indigo-600 px-4 py-1.5 font-bold text-white hover:bg-indigo-700 shadow-xs"
+                  >
+                    {editingSubject ? 'Save Changes' : 'Create Subject'}
+                  </button>
+                </div>
               </div>
             </form>
           </div>
@@ -1153,20 +1331,38 @@ export default function App() {
                 Transparent signature: <strong className="text-slate-800">{userName}</strong>
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsContentModalOpen(false)}
-                  className="rounded-xl px-3 py-1.5 text-slate-600 hover:bg-slate-100"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="rounded-xl bg-indigo-600 px-4 py-1.5 font-bold text-white hover:bg-indigo-700 shadow-xs"
-                >
-                  {editingContent ? 'Save Changes' : 'Save Material'}
-                </button>
+              <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                {editingContent ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (window.confirm('Delete this topic material?')) {
+                        handleDeleteContent(editingContent.id);
+                        setIsContentModalOpen(false);
+                      }
+                    }}
+                    className="rounded-xl px-3 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors"
+                  >
+                    Delete Material
+                  </button>
+                ) : (
+                  <div />
+                )}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsContentModalOpen(false)}
+                    className="rounded-xl px-3 py-1.5 text-slate-600 hover:bg-slate-100"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="rounded-xl bg-indigo-600 px-4 py-1.5 font-bold text-white hover:bg-indigo-700 shadow-xs"
+                  >
+                    {editingContent ? 'Save Changes' : 'Save Material'}
+                  </button>
+                </div>
               </div>
             </form>
           </div>

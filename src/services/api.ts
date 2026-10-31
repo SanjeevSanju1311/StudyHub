@@ -136,6 +136,52 @@ export const api = {
     return newSub;
   },
 
+  async updateSubject(id: string, name: string, semester?: string): Promise<SimpleSubject> {
+    const cleanName = name.trim();
+    const cleanSem = semester?.trim() || undefined;
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { error } = await supabase
+          .from('subjects')
+          .update({ name: cleanName, semester: cleanSem || null })
+          .eq('id', id);
+
+        if (!error) {
+          const list = getLocalSubjects();
+          const sub = list.find((s) => s.id === id);
+          if (sub) {
+            sub.name = cleanName;
+            sub.semester = cleanSem;
+            saveLocalSubjects(list);
+            return sub;
+          }
+        }
+      } catch (err) {
+        console.warn('Supabase updateSubject failed, falling back:', err);
+      }
+    }
+
+    try {
+      const res = await fetch(`/api/subjects/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: cleanName, semester: cleanSem }),
+      });
+      if (res.ok) return await res.json();
+    } catch {
+      // fallback
+    }
+
+    const localList = getLocalSubjects();
+    const sub = localList.find((s) => s.id === id);
+    if (!sub) throw new Error('Subject not found');
+    sub.name = cleanName;
+    sub.semester = cleanSem;
+    saveLocalSubjects(localList);
+    return sub;
+  },
+
   async deleteSubject(id: string): Promise<void> {
     if (isSupabaseConfigured && supabase) {
       try {
@@ -287,6 +333,61 @@ export const api = {
       completedBy: item.completedBy,
       isCompleted: item.completedBy.includes(userName),
     };
+  },
+
+  async updateChecklistTopic(
+    subjectId: string,
+    unit: number,
+    checkId: string,
+    title: string
+  ): Promise<ChecklistTopic> {
+    const cleanTitle = title.trim();
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { data: subRow } = await supabase.from('subjects').select('units').eq('id', subjectId).single();
+        if (subRow) {
+          const units = subRow.units || createDefaultUnits();
+          const item = units[unit]?.checklist.find((c: any) => c.id === checkId);
+          if (item) {
+            item.title = cleanTitle;
+            const { error } = await supabase.from('subjects').update({ units }).eq('id', subjectId);
+            if (!error) {
+              const localList = getLocalSubjects();
+              const sub = localList.find((s) => s.id === subjectId);
+              if (sub && sub.units[unit]) {
+                const lItem = sub.units[unit].checklist.find((c) => c.id === checkId);
+                if (lItem) lItem.title = cleanTitle;
+                saveLocalSubjects(localList);
+              }
+              return item;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Supabase updateChecklistTopic failed, falling back:', err);
+      }
+    }
+
+    try {
+      const res = await fetch(`/api/subjects/${subjectId}/units/${unit}/checklist/${checkId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: cleanTitle }),
+      });
+      if (res.ok) return await res.json();
+    } catch {
+      // fallback
+    }
+
+    const localList = getLocalSubjects();
+    const sub = localList.find((s) => s.id === subjectId);
+    if (!sub) throw new Error('Subject not found');
+    const item = sub.units[unit]?.checklist.find((c) => c.id === checkId);
+    if (!item) throw new Error('Checklist item not found');
+    item.title = cleanTitle;
+    saveLocalSubjects(localList);
+    return item;
   },
 
   async deleteChecklistTopic(subjectId: string, unit: number, checkId: string): Promise<void> {
